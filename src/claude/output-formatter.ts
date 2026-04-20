@@ -30,6 +30,7 @@ export const ACTION_IDS = {
   sessionResume: "session-resume",
   sessionDelete: "session-delete",
   sessionCancel: "session-cancel",
+  sessionSelect: "session-select",
   queueYes: "queue-yes",
   queueNo: "queue-no",
   queueClear: "queue-clear",

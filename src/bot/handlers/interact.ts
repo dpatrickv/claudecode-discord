@@ -200,6 +200,91 @@ export async function handleInteract(
   }
 
   // -------------------------------------------------------------------------
+  // Session select (from /sessions list). The user picked a session ID (or "new session"
+  // sentinel) from the select menu — either reset DB for a fresh session, or show
+  // Resume / Delete / Cancel buttons for the picked one. Relies on the adapter.edit
+  // to mutate the original post since building the Resume/Delete UI needs async fs reads
+  // (for the last-assistant-message preview).
+  if (actionId === ACTION_IDS.sessionSelect) {
+    const selected = req.selectedOption ?? "";
+    if (selected === "__new_session__") {
+      upsertSession(randomUUID(), channelId, null, "idle");
+      return {
+        update: spec2update({
+          attachments: [{
+            title: L("✨ New Session", "✨ 새 세션"),
+            text: L(
+              "New session is ready.\nA new conversation will start from your next message.",
+              "새 세션이 준비되었습니다.\n다음 메시지부터 새로운 대화가 시작됩니다.",
+            ),
+            color: COLORS.success,
+          }],
+        }),
+      };
+    }
+
+    // Kick off the "load preview + show Resume/Delete buttons" flow asynchronously
+    // against the original post. We return an "updating..." response immediately so
+    // MM doesn't hang; the real UI lands via adapter.edit a moment later.
+    (async () => {
+      const project = getProject(channelId);
+      let lastMessage = "";
+      if (project) {
+        const { findSessionDir, getLastAssistantMessage } = await import("../commands/sessions.js");
+        const sessionDir = findSessionDir(project.project_path);
+        if (sessionDir) {
+          try {
+            lastMessage = await getLastAssistantMessage(path.join(sessionDir, `${selected}.jsonl`));
+          } catch { /* ignore */ }
+        }
+      }
+
+      const preview = lastMessage && lastMessage !== "(no message)"
+        ? `\n\n${L("**Last conversation:**", "**마지막 대화:**")}\n${lastMessage.slice(0, 300)}${lastMessage.length > 300 ? "..." : ""}`
+        : "";
+
+      await ctx.adapter.edit(
+        { channelId, messageId: req.postId },
+        {
+          attachments: [{
+            title: L("Session Selected", "세션 선택됨"),
+            text: L(
+              `Session: \`${selected.slice(0, 8)}...\`\n\nResume or delete this session?`,
+              `세션: \`${selected.slice(0, 8)}...\`\n\n이 세션을 재개 또는 삭제하시겠습니까?`,
+            ) + preview,
+            color: COLORS.question,
+            actions: [
+              {
+                id: ACTION_IDS.sessionResume,
+                name: `▶️  ${L("Resume", "재개")}`,
+                type: "button",
+                style: "success",
+                context: { sessionId: selected },
+              },
+              {
+                id: ACTION_IDS.sessionDelete,
+                name: `🗑️  ${L("Delete", "삭제")}`,
+                type: "button",
+                style: "danger",
+                context: { sessionId: selected },
+              },
+              {
+                id: ACTION_IDS.sessionCancel,
+                name: L("Cancel", "취소"),
+                type: "button",
+                style: "default",
+                context: {},
+              },
+            ],
+          }],
+        },
+      ).catch((e) => {
+        console.warn("[session-select] Failed to update post:", e instanceof Error ? e.message : e);
+      });
+    })();
+    return {};
+  }
+
   // Session resume / delete / cancel (from /sessions UI)
   if (actionId === ACTION_IDS.sessionResume) {
     const sessionId = String(context.sessionId ?? "");
