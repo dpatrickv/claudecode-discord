@@ -1,7 +1,7 @@
 import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { ChatAdapter, ContentSpec, MessageRef } from "../adapters/chat-adapter.js";
+import type { ChatAdapter, MessageRef } from "../adapters/chat-adapter.js";
 import {
   upsertSession,
   updateSessionStatus,
@@ -65,7 +65,7 @@ export class SessionManager {
 
   constructor(private readonly adapter: ChatAdapter) {}
 
-  async sendMessage(channelId: string, prompt: string, userId?: string): Promise<void> {
+  async sendMessage(channelId: string, prompt: string, _userId?: string): Promise<void> {
     const project = getProject(channelId);
     if (!project) return;
 

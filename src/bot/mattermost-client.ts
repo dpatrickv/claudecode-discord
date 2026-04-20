@@ -8,13 +8,38 @@
  *   - Track the bot's own user ID (used by handlers to ignore own messages).
  */
 
-import { Client4, WebSocketClient } from "@mattermost/client";
+// @mattermost/client is CJS-only (its package.json has "type": "commonjs"), so
+// we can't use named imports from an ESM build. Default-import + destructure for
+// the runtime values, and a type-only import for the class-instance types used
+// in field declarations (merged with the same name so downstream code is natural).
+import type {
+  Client4 as Client4Type,
+  WebSocketClient as WebSocketClientType,
+} from "@mattermost/client";
+import mmClientPkg from "@mattermost/client";
+const { Client4, WebSocketClient } = mmClientPkg as unknown as {
+  Client4: new () => Client4Type;
+  WebSocketClient: new () => WebSocketClientType;
+};
 import WebSocket from "ws";
 
-// @mattermost/client uses a `WebSocket` global; in Node we need to polyfill it from `ws`.
-// Do this once at module load so every WebSocketClient created here picks it up.
-if (typeof (globalThis as any).WebSocket === "undefined") {
-  (globalThis as any).WebSocket = WebSocket;
+type Client4 = Client4Type;
+type WebSocketClient = WebSocketClientType;
+
+// @mattermost/client's WebSocketClient assumes a browser environment — it uses the
+// global WebSocket and calls window.addEventListener('online'/'offline', ...). In Node
+// we polyfill both: the WebSocket global from the `ws` package, and `window` as a
+// stub EventTarget so the addEventListener calls silently no-op.
+const g = globalThis as any;
+if (typeof g.WebSocket === "undefined") g.WebSocket = WebSocket;
+if (typeof g.window === "undefined") {
+  // Provide just the two methods WebSocketClient touches. EventTarget is too
+  // heavy; a no-op stub is fine because Node already handles connectivity via
+  // our manual reconnect-with-backoff loop.
+  g.window = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
 }
 
 export interface MattermostClientOptions {
@@ -95,8 +120,8 @@ export class MattermostClient {
     const ws = new WebSocketClient();
     this.ws = ws;
 
-    // WebSocketClient builds its own URL from a base URL — it wants http(s) form.
-    const wsUrl = this.opts.url; // WebSocketClient converts internally.
+    // WebSocketClient wants the full ws(s)://…/api/v4/websocket URL.
+    const wsUrl = this.opts.url.replace(/^http/, "ws").replace(/\/$/, "") + "/api/v4/websocket";
 
     ws.setFirstConnectCallback(() => {
       this.connected = true;
@@ -170,7 +195,8 @@ export class MattermostClient {
       }
     });
 
-    ws.initialize(this.opts.token, wsUrl);
+    // initialize(connectionUrl, token, postedAck?) — note URL comes first
+    ws.initialize(wsUrl, this.opts.token);
   }
 
   async close(): Promise<void> {

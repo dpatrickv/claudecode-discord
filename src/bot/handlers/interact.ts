@@ -24,7 +24,7 @@ import {
   ACTION_IDS,
   COLORS,
 } from "../../claude/output-formatter.js";
-import type { RichMessageSpec } from "../../adapters/chat-adapter.js";
+import type { RichMessageSpec, RichAction } from "../../adapters/chat-adapter.js";
 import type { HandlerContext, InteractRequest, InteractResponse } from "../types.js";
 
 /**
@@ -418,18 +418,18 @@ export async function handleInteract(
       })
       .join("\n\n");
 
-    const actions = queue.slice(0, 19).map((_, idx) => ({
+    const actions: RichAction[] = queue.slice(0, 19).map((_, idx) => ({
       id: ACTION_IDS.queueRemove,
       name: `❌ ${idx + 1}`,
-      type: "button" as const,
-      style: "default" as const,
+      type: "button",
+      style: "default",
       context: { channelId: ch, index: idx },
     }));
     actions.push({
       id: ACTION_IDS.queueClear,
       name: L("Clear All", "모두 취소"),
-      type: "button" as const,
-      style: "danger" as const,
+      type: "button",
+      style: "danger",
       context: { channelId: ch, index: -1 },
     });
 

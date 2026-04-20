@@ -9,7 +9,7 @@
  * Reference: https://docs.mattermost.com/developer/interactive-messages.html
  */
 
-import { Client4 } from "@mattermost/client";
+import type { Client4 } from "@mattermost/client";
 import type {
   ChatAdapter,
   ContentSpec,
@@ -81,39 +81,12 @@ export class MattermostAdapter implements ChatAdapter {
   async react(ref: MessageRef, emoji: string): Promise<void> {
     // Strip leading/trailing colons if the caller passed `:+1:`-style shortcode
     const name = emoji.replace(/^:|:$/g, "");
-    await this.opts.client.saveReaction({
-      user_id: this.opts.botUserId,
-      post_id: ref.messageId,
-      emoji_name: name,
-      create_at: 0,
-    } as any);
+    await this.opts.client.addReaction(this.opts.botUserId, ref.messageId, name);
   }
 
   async sendEphemeral(channelId: string, userId: string, content: ContentSpec): Promise<void> {
     const post = this.buildPost(channelId, content);
-    // createPostEphemeral exists on recent Client4 — fall back to a raw POST if missing
-    const client = this.opts.client as unknown as {
-      createPostEphemeral?: (userId: string, post: unknown) => Promise<unknown>;
-      getUrl: () => string;
-      getOptions: (opts: unknown) => unknown;
-    };
-    if (typeof client.createPostEphemeral === "function") {
-      await client.createPostEphemeral(userId, post);
-      return;
-    }
-
-    // Raw-POST fallback (older client versions don't expose createPostEphemeral)
-    const resp = await fetch(`${this.opts.client.getUrl()}/api/v4/posts/ephemeral`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${(this.opts.client as any).getToken?.() ?? ""}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ user_id: userId, post }),
-    });
-    if (!resp.ok) {
-      throw new Error(`Failed to send ephemeral post: ${resp.status} ${await resp.text()}`);
-    }
+    await this.opts.client.createPostEphemeral(userId, post as any);
   }
 
   // --- internals ---

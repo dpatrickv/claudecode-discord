@@ -14,9 +14,11 @@ const STATUS_EMOJI: Record<string, string> = {
   offline: "🔴",
 };
 
+// NOTE: triggered as `/claude-status` instead of `/status` because Mattermost
+// reserves `/status` for the built-in user-presence command (online/away/dnd/offline).
 export const command: CommandModule = {
-  name: "status",
-  description: "Show status of all registered project sessions",
+  name: "claude-status",
+  description: "Show status of all registered Claude Code project sessions",
   autoCompleteHint: "",
   autoCompleteDesc: "",
 

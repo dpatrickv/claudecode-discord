@@ -49,11 +49,11 @@ export async function registerCommands(opts: RegisterOptions): Promise<Map<strin
 
   // Fetch what's already registered on the team so we can update-in-place
   // instead of duplicate-registering (which MM rejects on trigger clash).
+  // getCustomTeamCommands returns only the team's custom slash commands (our target
+  // set). getCommandsList may include built-ins depending on the MM version.
   let existing: MMCommandSpec[] = [];
   try {
-    const raw = await (client as unknown as {
-      getCommandsList: (teamId: string) => Promise<MMCommandSpec[]>;
-    }).getCommandsList(teamId);
+    const raw = (await client.getCustomTeamCommands(teamId)) as unknown as MMCommandSpec[];
     existing = Array.isArray(raw) ? raw : [];
   } catch (e) {
     console.warn("[mm-startup] Failed to fetch existing commands:", e instanceof Error ? e.message : e);
@@ -77,14 +77,12 @@ export async function registerCommands(opts: RegisterOptions): Promise<Map<strin
 
     try {
       if (!match) {
-        const created = await (client as unknown as {
-          createCommand: (spec: MMCommandSpec) => Promise<MMCommandSpec>;
-        }).createCommand(desired);
+        const created = (await client.addCommand(desired as any)) as unknown as MMCommandSpec;
         if (created.token) commandTokens.set(cmd.name, created.token);
         console.log(`[mm-startup] created /${cmd.name}`);
       } else {
-        // Update only if something meaningful changed — the URL is the common case,
-        // since it changes every time BOT_PUBLIC_URL changes (e.g. moving hosts).
+        // Update only if something meaningful changed — URL is the common case,
+        // since it changes whenever BOT_PUBLIC_URL changes (e.g. moving hosts).
         const needsUpdate =
           match.url !== desired.url ||
           match.method !== desired.method ||
@@ -95,22 +93,16 @@ export async function registerCommands(opts: RegisterOptions): Promise<Map<strin
 
         if (needsUpdate) {
           const patched: MMCommandSpec = { ...match, ...desired, id: match.id };
-          await (client as unknown as {
-            updateCommand: (spec: MMCommandSpec) => Promise<MMCommandSpec>;
-          }).updateCommand(patched);
+          await client.editCommand(patched as any);
           console.log(`[mm-startup] updated /${cmd.name}`);
         }
 
-        // MM's token is returned on create only — for existing commands we need
-        // to call regenCommandToken (client4: regenCommandToken) to get a fresh
-        // one. We only do this if we don't already have a token stashed from
-        // a previous run. For simplicity, call it every startup — cheap and
-        // ensures we always have the current token.
+        // Mattermost only returns a command's token on creation. For existing
+        // commands we regenerate — cheap, and guarantees we always have the
+        // current token for HTTP-server verification.
         if (match.id) {
           try {
-            const regen = await (client as unknown as {
-              regenCommandToken: (id: string) => Promise<{ token: string }>;
-            }).regenCommandToken(match.id);
+            const regen = await client.regenCommandToken(match.id);
             if (regen?.token) commandTokens.set(cmd.name, regen.token);
           } catch (e) {
             console.warn(`[mm-startup] regen token for /${cmd.name} failed:`, e instanceof Error ? e.message : e);
