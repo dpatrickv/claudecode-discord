@@ -1,8 +1,19 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  DISCORD_BOT_TOKEN: z.string().min(1, "DISCORD_BOT_TOKEN is required"),
-  DISCORD_GUILD_ID: z.string().min(1, "DISCORD_GUILD_ID is required"),
+  /** Mattermost server base URL, e.g. https://mattermost.vanderhop.com (no trailing slash). */
+  MATTERMOST_URL: z.string().url("MATTERMOST_URL must be a valid URL"),
+  /** Personal access token for the bot user. System-admin role required for slash-command management. */
+  MATTERMOST_TOKEN: z.string().min(1, "MATTERMOST_TOKEN is required"),
+  /** Team ID the bot operates in. */
+  MATTERMOST_TEAM_ID: z.string().min(1, "MATTERMOST_TEAM_ID is required"),
+  /** Shared secret the bot validates on inbound webhook calls (slash commands, button callbacks). */
+  MATTERMOST_WEBHOOK_TOKEN: z.string().min(1, "MATTERMOST_WEBHOOK_TOKEN is required"),
+  /** Public URL Mattermost calls to reach the bot — e.g. http://10.0.2.244:9887. Used when registering slash commands. */
+  BOT_PUBLIC_URL: z.string().url("BOT_PUBLIC_URL must be a valid URL"),
+  /** Port the inbound HTTP server listens on. */
+  HTTP_BIND_PORT: z.coerce.number().int().positive().default(9887),
+  /** Comma-separated list of Mattermost user IDs allowed to talk to the bot. */
   ALLOWED_USER_IDS: z
     .string()
     .min(1, "ALLOWED_USER_IDS is required")

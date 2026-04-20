@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./utils/config.js";
 import { initDatabase } from "./db/database.js";
-import { startBot } from "./bot/client.js";
+import { startBot } from "./bot/index.js";
 
 const LOCK_FILE = path.join(process.cwd(), ".bot.lock");
 
@@ -55,7 +55,7 @@ async function main() {
     // Don't exit — let the bot keep running for non-fatal errors
   });
 
-  console.log("Starting Claude Code Discord Controller...");
+  console.log("Starting Claude Code Mattermost Controller...");
 
   // Load and validate config
   loadConfig();
@@ -65,7 +65,7 @@ async function main() {
   initDatabase();
   console.log("Database initialized");
 
-  // Start Discord bot
+  // Start Mattermost bot (WS client + HTTP server + slash commands + adapter wiring)
   await startBot();
   console.log("Bot is running!");
 }

@@ -6,13 +6,17 @@ describe("config", () => {
   beforeEach(() => {
     vi.resetModules();
     // Set valid env vars
-    process.env.DISCORD_BOT_TOKEN = "test-token";
-    process.env.DISCORD_GUILD_ID = "test-guild";
+    process.env.MATTERMOST_URL = "https://mattermost.example.com";
+    process.env.MATTERMOST_TOKEN = "test-token";
+    process.env.MATTERMOST_TEAM_ID = "team123";
+    process.env.MATTERMOST_WEBHOOK_TOKEN = "webhook-secret";
+    process.env.BOT_PUBLIC_URL = "http://10.0.0.1:9887";
     process.env.ALLOWED_USER_IDS = "user1,user2";
     process.env.BASE_PROJECT_DIR = "/projects";
     // Clear optional vars to use defaults
     delete process.env.RATE_LIMIT_PER_MINUTE;
     delete process.env.SHOW_COST;
+    delete process.env.HTTP_BIND_PORT;
   });
 
   afterEach(() => {
@@ -22,8 +26,9 @@ describe("config", () => {
   it("loadConfig returns valid config from environment", async () => {
     const { loadConfig } = await import("./config.js");
     const config = loadConfig();
-    expect(config.DISCORD_BOT_TOKEN).toBe("test-token");
-    expect(config.DISCORD_GUILD_ID).toBe("test-guild");
+    expect(config.MATTERMOST_URL).toBe("https://mattermost.example.com");
+    expect(config.MATTERMOST_TOKEN).toBe("test-token");
+    expect(config.MATTERMOST_TEAM_ID).toBe("team123");
     expect(config.ALLOWED_USER_IDS).toEqual(["user1", "user2"]);
     expect(config.BASE_PROJECT_DIR).toBe("/projects");
   });
@@ -33,6 +38,7 @@ describe("config", () => {
     const config = loadConfig();
     expect(config.RATE_LIMIT_PER_MINUTE).toBe(10);
     expect(config.SHOW_COST).toBe(true);
+    expect(config.HTTP_BIND_PORT).toBe(9887);
   });
 
   it("parses ALLOWED_USER_IDS with spaces", async () => {
@@ -49,6 +55,13 @@ describe("config", () => {
     expect(config.RATE_LIMIT_PER_MINUTE).toBe(20);
   });
 
+  it("coerces HTTP_BIND_PORT to integer", async () => {
+    process.env.HTTP_BIND_PORT = "9999";
+    const { loadConfig } = await import("./config.js");
+    const config = loadConfig();
+    expect(config.HTTP_BIND_PORT).toBe(9999);
+  });
+
   it("parses SHOW_COST as boolean", async () => {
     process.env.SHOW_COST = "false";
     const { loadConfig } = await import("./config.js");
@@ -57,13 +70,23 @@ describe("config", () => {
   });
 
   it("calls process.exit(1) when required env vars are missing", async () => {
-    delete process.env.DISCORD_BOT_TOKEN;
+    delete process.env.MATTERMOST_TOKEN;
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
     });
     const { loadConfig } = await import("./config.js");
     expect(() => loadConfig()).toThrow("process.exit called");
     expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
+  });
+
+  it("rejects invalid MATTERMOST_URL", async () => {
+    process.env.MATTERMOST_URL = "not-a-url";
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit called");
+    });
+    const { loadConfig } = await import("./config.js");
+    expect(() => loadConfig()).toThrow("process.exit called");
     exitSpy.mockRestore();
   });
 
@@ -77,6 +100,6 @@ describe("config", () => {
   it("getConfig calls loadConfig if not yet loaded", async () => {
     const { getConfig } = await import("./config.js");
     const config = getConfig();
-    expect(config.DISCORD_BOT_TOKEN).toBe("test-token");
+    expect(config.MATTERMOST_TOKEN).toBe("test-token");
   });
 });

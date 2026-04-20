@@ -1,39 +1,83 @@
-import {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  StringSelectMenuBuilder,
-} from "discord.js";
+/**
+ * Platform-neutral rich-message builders.
+ *
+ * Emits RichMessageSpec (see src/adapters/chat-adapter.ts), which concrete adapters
+ * translate into native rich-message types (Mattermost attachments, Discord embeds, etc.).
+ *
+ * Action IDs are stable logical strings — ACTION_IDS object below is the canonical list.
+ * Context payloads carry the data previously encoded into Discord's colon-delimited
+ * customId (e.g. customId="approve:<uuid>" becomes {id: "approve", context: {requestId}}).
+ */
+
+import type { RichMessageSpec, RichAttachment, RichAction } from "../adapters/chat-adapter.js";
 import { L } from "../utils/i18n.js";
 
-const MAX_DISCORD_LENGTH = 1900; // leave room for formatting
+/**
+ * Canonical action-ID vocabulary. Handlers dispatch on these.
+ * Kept centralized so the interact handler and the builders agree on spelling.
+ */
+export const ACTION_IDS = {
+  stop: "stop",
+  completed: "completed",
+  approve: "approve",
+  deny: "deny",
+  approveAll: "approve-all",
+  askOption: "ask-opt",
+  askOther: "ask-other",
+  askSelect: "ask-select",
+  answerYes: "answer-yes",
+  answerNo: "answer-no",
+  sessionResume: "session-resume",
+  sessionDelete: "session-delete",
+  sessionCancel: "session-cancel",
+  queueYes: "queue-yes",
+  queueNo: "queue-no",
+  queueClear: "queue-clear",
+  queueRemove: "queue-remove",
+} as const;
 
-export function formatStreamChunk(text: string): string {
-  if (text.length <= MAX_DISCORD_LENGTH) return text;
-  return text.slice(0, MAX_DISCORD_LENGTH) + "\n" + L("... (truncated)", "... (잘림)");
+/** Platform-independent colour palette. Adapters interpret these hex strings natively. */
+export const COLORS = {
+  info: "#5865F2",     // blue
+  success: "#00FF00",  // green
+  warning: "#FFA500",  // orange
+  danger: "#FF0000",   // red
+  question: "#7C3AED", // purple
+} as const;
+
+/** Default chunk length cap; adapters may override when calling splitMessage(). */
+const DEFAULT_MAX_LENGTH = 16383;
+
+export function formatStreamChunk(text: string, maxLength = DEFAULT_MAX_LENGTH): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + "\n" + L("... (truncated)", "... (잘림)");
 }
 
-export function splitMessage(text: string): string[] {
+/**
+ * Split a long message at code-fence-safe boundaries. Preserves open code blocks
+ * by closing them in chunk N and reopening in chunk N+1 with the same language.
+ * maxLength is platform-dependent — pass the adapter's `maxMessageLength`.
+ */
+export function splitMessage(text: string, maxLength = DEFAULT_MAX_LENGTH): string[] {
   const chunks: string[] = [];
   let remaining = text;
 
   while (remaining.length > 0) {
-    if (remaining.length <= MAX_DISCORD_LENGTH) {
+    if (remaining.length <= maxLength) {
       chunks.push(remaining);
       break;
     }
 
     // Try to split at a newline
-    let splitAt = remaining.lastIndexOf("\n", MAX_DISCORD_LENGTH);
-    if (splitAt === -1 || splitAt < MAX_DISCORD_LENGTH / 2) {
-      splitAt = MAX_DISCORD_LENGTH;
+    let splitAt = remaining.lastIndexOf("\n", maxLength);
+    if (splitAt === -1 || splitAt < maxLength / 2) {
+      splitAt = maxLength;
     }
 
     let chunk = remaining.slice(0, splitAt);
     remaining = remaining.slice(splitAt);
 
-    // Check if we're splitting inside an unclosed code block
+    // Detect if we're splitting inside an unclosed code block
     const fenceRegex = /^```/gm;
     let insideBlock = false;
     let blockLang = "";
@@ -61,95 +105,106 @@ export function splitMessage(text: string): string[] {
   return chunks;
 }
 
-export function createStopButton(
-  channelId: string,
-): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`stop:${channelId}`)
-      .setLabel(L("Stop", "중지"))
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji("⏹️"),
-  );
+/** Stop button attachment — pair with any in-progress message. */
+export function createStopButton(channelId: string): RichAttachment {
+  return {
+    actions: [{
+      id: ACTION_IDS.stop,
+      name: `⏹️  ${L("Stop", "중지")}`,
+      type: "button",
+      style: "danger",
+      context: { channelId },
+    }],
+  };
 }
 
-export function createCompletedButton(): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("completed")
-      .setLabel(L("Completed", "완료됨"))
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("✅")
-      .setDisabled(true),
-  );
+/** Disabled "completed" button — replaces Stop once a session finishes. */
+export function createCompletedButton(): RichAttachment {
+  return {
+    actions: [{
+      id: ACTION_IDS.completed,
+      name: `✅  ${L("Completed", "완료됨")}`,
+      type: "button",
+      style: "default",
+      context: { disabled: true },
+    }],
+  };
 }
 
-export function createToolApprovalEmbed(
+/**
+ * Tool-approval request. Shown to the user before Claude runs a non-read-only tool.
+ * Buttons: Approve / Deny / Auto-approve-all.
+ */
+export function createToolApprovalSpec(
   toolName: string,
   input: Record<string, unknown>,
   requestId: string,
-): { embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> } {
-  const embed = new EmbedBuilder()
-    .setTitle(L(`🔧 Tool Use: ${toolName}`, `🔧 도구 사용: ${toolName}`))
-    .setColor(0xffa500)
-    .setTimestamp();
+): RichMessageSpec {
+  const attachment: RichAttachment = {
+    title: L(`🔧 Tool Use: ${toolName}`, `🔧 도구 사용: ${toolName}`),
+    color: COLORS.warning,
+    fields: [],
+  };
 
-  // Add relevant fields based on tool type
   if (toolName === "Edit" || toolName === "Write") {
     const filePath = (input.file_path as string) ?? "unknown";
-    embed.addFields({ name: L("File", "파일"), value: `\`${filePath}\``, inline: false });
+    attachment.fields!.push({ title: L("File", "파일"), value: `\`${filePath}\`` });
 
     if (input.old_string && input.new_string) {
       const diff = `\`\`\`diff\n- ${String(input.old_string).slice(0, 500)}\n+ ${String(input.new_string).slice(0, 500)}\n\`\`\``;
-      embed.addFields({ name: L("Changes", "변경 사항"), value: diff, inline: false });
+      attachment.fields!.push({ title: L("Changes", "변경 사항"), value: diff });
     } else if (input.content) {
       const preview = String(input.content).slice(0, 500);
-      embed.addFields({
-        name: L("Content Preview", "내용 미리보기"),
+      attachment.fields!.push({
+        title: L("Content Preview", "내용 미리보기"),
         value: `\`\`\`\n${preview}\n\`\`\``,
-        inline: false,
       });
     }
   } else if (toolName === "Bash") {
     const command = (input.command as string) ?? "unknown";
     const description = (input.description as string) ?? "";
-    embed.addFields(
-      { name: L("Command", "명령어"), value: `\`\`\`bash\n${command}\n\`\`\``, inline: false },
-    );
+    attachment.fields!.push({
+      title: L("Command", "명령어"),
+      value: `\`\`\`bash\n${command}\n\`\`\``,
+    });
     if (description) {
-      embed.addFields({ name: L("Description", "설명"), value: description, inline: false });
+      attachment.fields!.push({ title: L("Description", "설명"), value: description });
     }
   } else {
-    // Generic tool display - skip empty input
     const summary = JSON.stringify(input, null, 2);
     if (summary && summary !== "{}") {
-      embed.addFields({
-        name: L("Input", "입력"),
+      attachment.fields!.push({
+        title: L("Input", "입력"),
         value: `\`\`\`json\n${summary.slice(0, 800)}\n\`\`\``,
-        inline: false,
       });
     }
   }
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`approve:${requestId}`)
-      .setLabel(L("Approve", "승인"))
-      .setStyle(ButtonStyle.Success)
-      .setEmoji("✅"),
-    new ButtonBuilder()
-      .setCustomId(`deny:${requestId}`)
-      .setLabel(L("Deny", "거부"))
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji("❌"),
-    new ButtonBuilder()
-      .setCustomId(`approve-all:${requestId}`)
-      .setLabel(L("Auto-approve All", "모두 자동 승인"))
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("⚡"),
-  );
+  attachment.actions = [
+    {
+      id: ACTION_IDS.approve,
+      name: `✅  ${L("Approve", "승인")}`,
+      type: "button",
+      style: "success",
+      context: { requestId },
+    },
+    {
+      id: ACTION_IDS.deny,
+      name: `❌  ${L("Deny", "거부")}`,
+      type: "button",
+      style: "danger",
+      context: { requestId },
+    },
+    {
+      id: ACTION_IDS.approveAll,
+      name: `⚡  ${L("Auto-approve All", "모두 자동 승인")}`,
+      type: "button",
+      style: "default",
+      context: { requestId },
+    },
+  ];
 
-  return { embed, row };
+  return { attachments: [attachment] };
 }
 
 export interface AskQuestionData {
@@ -159,113 +214,88 @@ export interface AskQuestionData {
   multiSelect: boolean;
 }
 
-export function createAskUserQuestionEmbed(
+/**
+ * AskUserQuestion tool UI. Emits either buttons (single-select) or a select menu (multi-select),
+ * plus a "Custom input" button for free-text answers.
+ */
+export function createAskUserQuestionSpec(
   questionData: AskQuestionData,
   requestId: string,
   questionIndex: number,
   totalQuestions: number,
-): { embed: EmbedBuilder; components: ActionRowBuilder<any>[] } {
-  const title =
-    totalQuestions > 1
-      ? `❓ ${questionData.header} (${questionIndex + 1}/${totalQuestions})`
-      : `❓ ${questionData.header}`;
+): RichMessageSpec {
+  const title = totalQuestions > 1
+    ? `❓ ${questionData.header} (${questionIndex + 1}/${totalQuestions})`
+    : `❓ ${questionData.header}`;
 
-  const embed = new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(questionData.question)
-    .setColor(0x7c3aed)
-    .setTimestamp();
-
-  // Add option descriptions as embed fields
-  for (const opt of questionData.options) {
-    embed.addFields({
-      name: opt.label,
+  const attachment: RichAttachment = {
+    title,
+    text: questionData.question,
+    color: COLORS.question,
+    fields: questionData.options.map((opt) => ({
+      title: opt.label,
       value: opt.description || "\u200b",
-      inline: false,
+    })),
+  };
+
+  if (questionData.multiSelect) {
+    attachment.actions = [
+      {
+        id: ACTION_IDS.askSelect,
+        name: L("Select options...", "옵션을 선택하세요..."),
+        type: "select",
+        context: { requestId },
+        options: questionData.options.map((opt, i) => ({
+          text: opt.label.slice(0, 100),
+          value: String(i),
+        })),
+      },
+      {
+        id: ACTION_IDS.askOther,
+        name: `✏️  ${L("Custom input", "직접 입력")}`,
+        type: "button",
+        style: "default",
+        context: { requestId },
+      },
+    ];
+  } else {
+    attachment.actions = questionData.options.map((opt, i): RichAction => ({
+      id: ACTION_IDS.askOption,
+      name: opt.label.slice(0, 80),
+      type: "button",
+      style: i === 0 ? "primary" : "default",
+      context: { requestId, optionIndex: i },
+    }));
+    attachment.actions.push({
+      id: ACTION_IDS.askOther,
+      name: `✏️  ${L("Custom input", "직접 입력")}`,
+      type: "button",
+      style: "default",
+      context: { requestId },
     });
   }
 
-  const components: ActionRowBuilder<any>[] = [];
-
-  if (questionData.multiSelect) {
-    // Use StringSelectMenu for multi-select
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(`ask-select:${requestId}`)
-      .setPlaceholder(L("Select options...", "옵션을 선택하세요..."))
-      .setMinValues(1)
-      .setMaxValues(questionData.options.length)
-      .addOptions(
-        questionData.options.map((opt, i) => ({
-          label: opt.label.slice(0, 100),
-          value: String(i),
-          ...(opt.description
-            ? { description: opt.description.slice(0, 100) }
-            : {}),
-        })),
-      );
-
-    components.push(
-      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu),
-    );
-
-    // Custom input button in separate row
-    components.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`ask-other:${requestId}`)
-          .setLabel(L("Custom input", "직접 입력"))
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji("✏️"),
-      ),
-    );
-  } else {
-    // Use buttons for single select
-    const buttons: ButtonBuilder[] = questionData.options.map((opt, i) =>
-      new ButtonBuilder()
-        .setCustomId(`ask-opt:${requestId}:${i}`)
-        .setLabel(opt.label.slice(0, 80))
-        .setStyle(i === 0 ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    );
-
-    // Custom input button
-    buttons.push(
-      new ButtonBuilder()
-        .setCustomId(`ask-other:${requestId}`)
-        .setLabel(L("Custom input", "직접 입력"))
-        .setStyle(ButtonStyle.Secondary)
-        .setEmoji("✏️"),
-    );
-
-    // Discord max 5 buttons per row
-    for (let i = 0; i < buttons.length; i += 5) {
-      components.push(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          ...buttons.slice(i, i + 5),
-        ),
-      );
-    }
-  }
-
-  return { embed, components };
+  return { attachments: [attachment] };
 }
 
-export function createResultEmbed(
+/** Final-result summary. Emitted when the Claude session completes a request. */
+export function createResultSpec(
   result: string,
   costUsd: number,
   durationMs: number,
-  showCost: boolean = true,
-): EmbedBuilder {
+  showCost = true,
+): RichMessageSpec {
   const duration = `${(durationMs / 1000).toFixed(1)}s`;
   const footer = showCost
-    ? `${L("Cost (est.)", "비용 (추정)")} : $${costUsd.toFixed(4)}  |  ${L("Duration", "소요 시간")} : ${duration}`
-    : `${L("Duration", "소요 시간")} : ${duration}`;
+    ? `${L("Cost (est.)", "비용 (추정)")}: $${costUsd.toFixed(4)}  |  ${L("Duration", "소요 시간")}: ${duration}`
+    : `${L("Duration", "소요 시간")}: ${duration}`;
 
-  const embed = new EmbedBuilder()
-    .setTitle(L("✅ Task Complete", "✅ 작업 완료"))
-    .setDescription(result.slice(0, 4000))
-    .setColor(0x00ff00)
-    .setFooter({ text: footer })
-    .setTimestamp();
-
-  return embed;
+  return {
+    attachments: [{
+      title: L("✅ Task Complete", "✅ 작업 완료"),
+      text: result.slice(0, 4000),
+      color: COLORS.success,
+      footer,
+    }],
+  };
 }

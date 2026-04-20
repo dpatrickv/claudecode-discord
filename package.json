@@ -1,7 +1,7 @@
 {
-  "name": "claude-code-discord-controller",
-  "version": "1.2.3",
-  "description": "Control multiple Claude Code sessions from Discord (mobile-friendly)",
+  "name": "claude-code-mattermost-controller",
+  "version": "2.0.0",
+  "description": "Control multiple Claude Code sessions from Mattermost (mobile-friendly). Fork of claudecode-discord.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -9,18 +9,25 @@
     "build": "tsup src/index.ts --format esm --dts",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.86",
+    "@mattermost/client": "^10.5.0",
+    "@mattermost/types": "^10.5.0",
     "better-sqlite3": "^11.0.0",
-    "discord.js": "^14.19.3",
     "dotenv": "^17.2.4",
+    "express": "^4.21.0",
+    "form-data": "^4.0.0",
+    "ws": "^8.18.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
+    "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
     "tsup": "^8.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0",
