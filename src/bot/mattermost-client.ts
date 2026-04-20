@@ -78,7 +78,6 @@ export class MattermostClient {
   readonly client: Client4;
   private ws: WebSocketClient | null = null;
   private connected = false;
-  private reconnectAttempts = 0;
   private closing = false;
   private botUserId: string | null = null;
   private postedHandlers: PostedHandler[] = [];
@@ -142,15 +141,14 @@ export class MattermostClient {
       console.error("[mm-client] WebSocket error:", err);
     });
 
-    ws.setCloseCallback(() => {
+    ws.setCloseCallback((failCount: number) => {
       this.connected = false;
       if (this.closing) return;
-      this.reconnectAttempts++;
-      const delay = Math.min(30_000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
-      console.warn(`[mm-client] WebSocket closed, reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-      setTimeout(() => {
-        if (!this.closing) this.openWebSocket();
-      }, delay);
+      // WebSocketClient has its own internal reconnect loop — it will fire
+      // setReconnectCallback when it re-establishes. Do NOT call openWebSocket()
+      // here; doing so creates a second WS connection which causes duplicate
+      // events (2 responses per message). Log only.
+      console.warn(`[mm-client] WebSocket closed (failCount=${failCount}) — waiting for internal reconnect`);
     });
 
     ws.setEventCallback((msg: any) => {
