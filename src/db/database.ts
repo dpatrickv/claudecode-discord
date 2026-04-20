@@ -8,7 +8,11 @@ let db: Database.Database;
 
 export function initDatabase(): void {
   db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  // DELETE (not WAL) journal — keeps all state in a single data.db file so our
+  // /boot-persistence symlink scheme, cp-based backups, and `cp data.db` during
+  // deploy can't silently miss writes that are living only in data.db-wal.
+  // Ported from the upstream 0002-sqlite-delete-journal-mode patch.
+  db.pragma("journal_mode = DELETE");
   db.pragma("foreign_keys = ON");
 
   db.exec(`
