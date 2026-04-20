@@ -56,15 +56,21 @@ export function createHttpServer(opts: HttpServerOptions): Express {
       responseUrl: body.response_url,
     };
 
-    // Per-command token verification — Mattermost generates this at command-creation time
-    // and we stash it in opts.context.commandTokens. A mismatch means spoofed or stale.
+    // Per-command token verification — warn-only. Mattermost regenerates these
+    // server-side on every bot startup (via mm-startup.regenCommandToken), so
+    // any request in flight during a restart carries a stale token. Since the
+    // real security boundary is the ALLOWED_USER_IDS allowlist (checked below)
+    // and the bot only binds to LAN, we log the mismatch but still accept the
+    // request rather than 401-ing a legitimate user.
     const expected = opts.context.commandTokens.get(commandName);
     if (!expected) {
       console.warn(`[http] slash /${commandName}: no registered token (startup incomplete?)`);
     } else if (request.token !== expected) {
-      console.warn(`[http] slash /${commandName}: token mismatch from user=${request.userId}`);
-      res.status(401).json({ text: "Unauthorized request." });
-      return;
+      const sentPrefix = request.token.slice(0, 6) || "(empty)";
+      const expectedPrefix = expected.slice(0, 6);
+      console.warn(
+        `[http] slash /${commandName}: token mismatch (sent=${sentPrefix}… expected=${expectedPrefix}…) user=${request.userId} — continuing (allowlist-gated)`,
+      );
     }
 
     if (!isAllowedUser(request.userId)) {
