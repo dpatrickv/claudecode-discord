@@ -105,6 +105,55 @@ export function splitMessage(text: string, maxLength = DEFAULT_MAX_LENGTH): stri
   return chunks;
 }
 
+/**
+ * Detect whether a completed assistant message ends with a yes/no question,
+ * so the UI can attach Yes/No quick-reply buttons. Conservative heuristic —
+ * only matches when the last sentence is a question AND starts with a modal
+ * or is explicitly marked (y/n).
+ */
+export function detectYesNoQuestion(text: string): { isQuestion: boolean } {
+  if (!text) return { isQuestion: false };
+  const trimmed = text.trim();
+  if (!trimmed.endsWith("?")) return { isQuestion: false };
+
+  const match = trimmed.match(/[^.!?\n]*\?$/);
+  if (!match) return { isQuestion: false };
+  const question = match[0].trim();
+
+  if (/\((?:y\/n|yes\/no)\)/i.test(question)) return { isQuestion: true };
+
+  const clean = question.replace(/^[*_`>\-\s]+/, "").toLowerCase();
+  const yesNoStarters = [
+    "want ", "should ", "shall ", "do you", "does ", "did ",
+    "can ", "could ", "will ", "would ", "may ", "might ",
+    "is ", "are ", "was ", "were ", "has ", "have ", "had ",
+    "ready ", "confirm", "proceed", "go ahead",
+  ];
+  return { isQuestion: yesNoStarters.some((s) => clean.startsWith(s)) };
+}
+
+/** Yes/No quick-reply buttons — attached to a completed assistant message when it ends with a yes/no question. */
+export function createYesNoButtons(channelId: string): RichAttachment {
+  return {
+    actions: [
+      {
+        id: ACTION_IDS.answerYes,
+        name: `✅  ${L("Yes", "예")}`,
+        type: "button",
+        style: "success",
+        context: { channelId },
+      },
+      {
+        id: ACTION_IDS.answerNo,
+        name: `❌  ${L("No", "아니요")}`,
+        type: "button",
+        style: "danger",
+        context: { channelId },
+      },
+    ],
+  };
+}
+
 /** Stop button attachment — pair with any in-progress message. */
 export function createStopButton(channelId: string): RichAttachment {
   return {

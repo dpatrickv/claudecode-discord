@@ -17,6 +17,8 @@ import {
   createResultSpec,
   createStopButton,
   createCompletedButton,
+  createYesNoButtons,
+  detectYesNoQuestion,
   splitMessage,
   type AskQuestionData,
 } from "./output-formatter.js";
@@ -327,13 +329,20 @@ export class SessionManager {
             }
           }
 
-          // Replace stop button with completed button
+          // Replace stop button with completed button. If Claude's final text
+          // reads as a yes/no question, also attach Yes/No quick-reply buttons
+          // so the user can tap instead of typing (a typed reply would otherwise
+          // land in the queue since the session is still technically wrapping up).
+          const finalAttachments = [createCompletedButton()];
+          if (detectYesNoQuestion(responseBuffer).isQuestion) {
+            finalAttachments.push(createYesNoButtons(channelId));
+          }
           try {
             await this.adapter.edit(currentMessage, {
               text: responseBuffer.length > 0
                 ? (splitMessage(responseBuffer, this.adapter.maxMessageLength)[0] ?? "")
                 : L("Done.", "완료."),
-              attachments: [createCompletedButton()],
+              attachments: finalAttachments,
             });
           } catch (e) {
             console.warn(`[complete] Failed to update completed button for ${channelId}:`, e instanceof Error ? e.message : e);
@@ -530,6 +539,19 @@ export class SessionManager {
 
   hasQueue(channelId: string): boolean {
     return this.pendingQueuePrompts.has(channelId);
+  }
+
+  /**
+   * Push a message directly onto the queue without a pending-confirmation step.
+   * Used by UI affordances (Yes/No quick-reply buttons) where the click itself
+   * is explicit confirmation. Returns false if the queue is at capacity.
+   */
+  enqueueDirect(channelId: string, prompt: string, userId?: string): boolean {
+    if (this.isQueueFull(channelId)) return false;
+    const queue = this.messageQueue.get(channelId) ?? [];
+    queue.push({ channelId, prompt, userId });
+    this.messageQueue.set(channelId, queue);
+    return true;
   }
 
   getQueue(channelId: string): QueuedMessage[] {
