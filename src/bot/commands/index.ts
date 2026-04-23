@@ -16,6 +16,8 @@ import { command as clearSessionsCmd } from "./clear-sessions.js";
 import { command as lastCmd } from "./last.js";
 import { command as queueCmd } from "./queue.js";
 import { command as usageCmd } from "./usage.js";
+import { command as brewCmd } from "./brew.js";
+import { command as bfStatusCmd } from "./bf-status.js";
 
 export const ALL_COMMANDS: CommandModule[] = [
   registerCmd,
@@ -28,6 +30,8 @@ export const ALL_COMMANDS: CommandModule[] = [
   lastCmd,
   queueCmd,
   usageCmd,
+  brewCmd,
+  bfStatusCmd,
 ];
 
 export function buildCommandMap(): Map<string, CommandModule> {

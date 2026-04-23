@@ -24,6 +24,12 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Optional homelab brewing APIs
+  BREW_INVENTORY_URL: z.string().url().optional(),
+  TAPLIST_URL: z.string().url().optional(),
+  ISPINDEL_URL: z.string().url().optional(),
+  BF_USER_ID: z.string().optional(),
+  BF_API_KEY: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

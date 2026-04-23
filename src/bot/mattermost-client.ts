@@ -74,6 +74,12 @@ export interface PostedEvent {
 export type WSEventHandler = (eventType: string, data: Record<string, unknown>, broadcast: unknown) => void;
 export type PostedHandler = (event: PostedEvent) => void | Promise<void>;
 
+// How many consecutive close-with-failCount≥1 cycles before we give up and
+// let the supervisor wrapper restart the process. This breaks the "sequence
+// desync" tight loop: server closes → client reconnects → "long timeout" →
+// server closes again → ... indefinitely. 5 consecutive failures ≈ 75–150s.
+const MAX_WS_FAIL_CYCLES = 5;
+
 export class MattermostClient {
   readonly client: Client4;
   private ws: WebSocketClient | null = null;
@@ -82,6 +88,7 @@ export class MattermostClient {
   private botUserId: string | null = null;
   private postedHandlers: PostedHandler[] = [];
   private rawHandlers: WSEventHandler[] = [];
+  private wsCycleFailures = 0;
 
   constructor(private readonly opts: MattermostClientOptions) {
     this.client = new Client4();
@@ -130,6 +137,7 @@ export class MattermostClient {
 
     ws.setReconnectCallback(() => {
       this.connected = true;
+      this.wsCycleFailures = 0;
       console.log("[mm-client] WebSocket reconnected");
     });
 
@@ -149,6 +157,24 @@ export class MattermostClient {
       // here; doing so creates a second WS connection which causes duplicate
       // events (2 responses per message). Log only.
       console.warn(`[mm-client] WebSocket closed (failCount=${failCount}) — waiting for internal reconnect`);
+
+      // Track consecutive failures. A failure is any close that happens while
+      // failCount > 0 (meaning the internal reconnect has already tried once).
+      // The "sequence desync" storm (1006 → reconnect → 1006 → ...) triggers
+      // this path on every cycle. After MAX_WS_FAIL_CYCLES we give up and exit
+      // so the supervisor wrapper can do a clean restart with a fresh connection.
+      if (failCount >= 1) {
+        this.wsCycleFailures++;
+        if (this.wsCycleFailures >= MAX_WS_FAIL_CYCLES) {
+          console.error(
+            `[mm-client] ${MAX_WS_FAIL_CYCLES} consecutive WS failures — exiting for supervisor restart`
+          );
+          process.exit(1);
+        }
+      } else {
+        // Clean disconnect (failCount=0) — reset the counter.
+        this.wsCycleFailures = 0;
+      }
     });
 
     ws.setEventCallback((msg: any) => {
