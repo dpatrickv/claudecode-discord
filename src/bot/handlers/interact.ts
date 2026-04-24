@@ -56,13 +56,18 @@ export async function handleInteract(
   const { actionId, context, channelId, userId, username } = req;
 
   // -------------------------------------------------------------------------
-  // Stop button
+  // Stop button — fire-and-forget so we respond before Mattermost's 30s
+  // action-callback timeout. interrupt() can block waiting for Claude to
+  // acknowledge the cancel; we don't need to await it to update the message.
   if (actionId === ACTION_IDS.stop) {
     const targetChannel = String(context.channelId ?? channelId);
-    const stopped = await ctx.sessionManager.stopSession(targetChannel);
+    const isActive = ctx.sessionManager.isActive(targetChannel);
+    ctx.sessionManager.stopSession(targetChannel).catch((e) => {
+      console.warn("[stop] stopSession error:", e instanceof Error ? e.message : e);
+    });
     return {
       update: plainUpdate(L("⏹️ Task has been stopped.", "⏹️ 작업이 중지되었습니다.")),
-      ...(stopped ? {} : { ephemeral_text: L("No active session.", "활성 세션이 없습니다.") }),
+      ...(isActive ? {} : { ephemeral_text: L("No active session.", "활성 세션이 없습니다.") }),
     };
   }
 
@@ -411,6 +416,9 @@ export async function handleInteract(
     }
 
     // Rebuild the queue UI with one-per-item remove buttons + a clear-all button.
+    // Use adapter.edit() rather than spec2update() so that translateAction() is
+    // applied to each button — spec2update() bypasses the adapter and would omit
+    // integration.url from the refreshed buttons.
     const list = queue
       .map((item, idx) => {
         const p = item.prompt.length > 100 ? item.prompt.slice(0, 100) + "…" : item.prompt;
@@ -433,16 +441,22 @@ export async function handleInteract(
       context: { channelId: ch, index: -1 },
     });
 
-    return {
-      update: spec2update({
-        attachments: [{
-          title: L(`📋 Message Queue (${queue.length})`, `📋 메시지 큐 (${queue.length}개)`),
-          text: `~~${preview}~~ ${L("removed", "취소됨")}\n\n${list}`,
-          color: COLORS.info,
-          actions,
-        }],
-      }),
-    };
+    if (req.postId) {
+      ctx.adapter.edit(
+        { channelId: ch, messageId: req.postId },
+        {
+          attachments: [{
+            title: L(`📋 Message Queue (${queue.length})`, `📋 메시지 큐 (${queue.length}개)`),
+            text: `~~${preview}~~ ${L("removed", "취소됨")}\n\n${list}`,
+            color: COLORS.info,
+            actions,
+          }],
+        },
+      ).catch((e) => {
+        console.warn("[queue-remove] Failed to update queue post:", e instanceof Error ? e.message : e);
+      });
+    }
+    return {};
   }
 
   // -------------------------------------------------------------------------
