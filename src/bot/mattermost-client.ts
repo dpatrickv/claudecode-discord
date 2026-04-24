@@ -74,11 +74,14 @@ export interface PostedEvent {
 export type WSEventHandler = (eventType: string, data: Record<string, unknown>, broadcast: unknown) => void;
 export type PostedHandler = (event: PostedEvent) => void | Promise<void>;
 
-// How many consecutive close-with-failCount≥1 cycles before we give up and
-// let the supervisor wrapper restart the process. This breaks the "sequence
-// desync" tight loop: server closes → client reconnects → "long timeout" →
-// server closes again → ... indefinitely. 5 consecutive failures ≈ 75–150s.
-const MAX_WS_FAIL_CYCLES = 5;
+// Storm detection: if the WS reconnects N times inside a rolling window, we
+// give up and let the supervisor wrapper restart. Counting *consecutive*
+// failCount≥1 closes does NOT work, because every successful reconnect fires
+// setReconnectCallback which would reset the counter — so a close→reconnect→
+// close→reconnect ping-pong (the shape we actually see in prod) never trips.
+// Counting reconnects in a time window catches the real pattern.
+const WS_STORM_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const WS_STORM_MAX_RECONNECTS = 5;
 
 export class MattermostClient {
   readonly client: Client4;
@@ -88,7 +91,10 @@ export class MattermostClient {
   private botUserId: string | null = null;
   private postedHandlers: PostedHandler[] = [];
   private rawHandlers: WSEventHandler[] = [];
-  private wsCycleFailures = 0;
+  private lastConnectedAt: Date | null = null;
+  private lastClosedAt: Date | null = null;
+  private totalReconnects = 0;
+  private wsReconnectTimestamps: number[] = [];
 
   constructor(private readonly opts: MattermostClientOptions) {
     this.client = new Client4();
@@ -131,13 +137,15 @@ export class MattermostClient {
 
     ws.setFirstConnectCallback(() => {
       this.connected = true;
-      this.reconnectAttempts = 0;
+      this.lastConnectedAt = new Date();
       console.log("[mm-client] WebSocket connected");
     });
 
     ws.setReconnectCallback(() => {
       this.connected = true;
-      this.wsCycleFailures = 0;
+      this.lastConnectedAt = new Date();
+      this.totalReconnects++;
+      this.recordReconnect();
       console.log("[mm-client] WebSocket reconnected");
     });
 
@@ -151,30 +159,15 @@ export class MattermostClient {
 
     ws.setCloseCallback((failCount: number) => {
       this.connected = false;
+      this.lastClosedAt = new Date();
       if (this.closing) return;
       // WebSocketClient has its own internal reconnect loop — it will fire
       // setReconnectCallback when it re-establishes. Do NOT call openWebSocket()
       // here; doing so creates a second WS connection which causes duplicate
-      // events (2 responses per message). Log only.
+      // events (2 responses per message). Log only; storm detection lives in
+      // recordReconnect() so that both "reconnect succeeded and closed again"
+      // and "reconnect kept failing" surface the same way.
       console.warn(`[mm-client] WebSocket closed (failCount=${failCount}) — waiting for internal reconnect`);
-
-      // Track consecutive failures. A failure is any close that happens while
-      // failCount > 0 (meaning the internal reconnect has already tried once).
-      // The "sequence desync" storm (1006 → reconnect → 1006 → ...) triggers
-      // this path on every cycle. After MAX_WS_FAIL_CYCLES we give up and exit
-      // so the supervisor wrapper can do a clean restart with a fresh connection.
-      if (failCount >= 1) {
-        this.wsCycleFailures++;
-        if (this.wsCycleFailures >= MAX_WS_FAIL_CYCLES) {
-          console.error(
-            `[mm-client] ${MAX_WS_FAIL_CYCLES} consecutive WS failures — exiting for supervisor restart`
-          );
-          process.exit(1);
-        }
-      } else {
-        // Clean disconnect (failCount=0) — reset the counter.
-        this.wsCycleFailures = 0;
-      }
     });
 
     ws.setEventCallback((msg: any) => {
@@ -231,5 +224,43 @@ export class MattermostClient {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  /** Snapshot of WebSocket health for /healthz. */
+  getWsHealth(): {
+    connected: boolean;
+    lastConnectedAt: string | null;
+    lastClosedAt: string | null;
+    totalReconnects: number;
+    reconnectsInWindow: number;
+    windowMs: number;
+  } {
+    // Prune the sliding window before reporting so /healthz consumers see
+    // the current storm-detector view, not a stale one.
+    const now = Date.now();
+    const cutoff = now - WS_STORM_WINDOW_MS;
+    this.wsReconnectTimestamps = this.wsReconnectTimestamps.filter((t) => t >= cutoff);
+    return {
+      connected: this.connected,
+      lastConnectedAt: this.lastConnectedAt ? this.lastConnectedAt.toISOString() : null,
+      lastClosedAt: this.lastClosedAt ? this.lastClosedAt.toISOString() : null,
+      totalReconnects: this.totalReconnects,
+      reconnectsInWindow: this.wsReconnectTimestamps.length,
+      windowMs: WS_STORM_WINDOW_MS,
+    };
+  }
+
+  private recordReconnect(): void {
+    const now = Date.now();
+    this.wsReconnectTimestamps.push(now);
+    const cutoff = now - WS_STORM_WINDOW_MS;
+    this.wsReconnectTimestamps = this.wsReconnectTimestamps.filter((t) => t >= cutoff);
+    if (this.wsReconnectTimestamps.length >= WS_STORM_MAX_RECONNECTS) {
+      console.error(
+        `[mm-client] ${this.wsReconnectTimestamps.length} WS reconnects in ${WS_STORM_WINDOW_MS / 1000}s — exiting for supervisor restart`,
+      );
+      // Brief delay to flush stderr before exit.
+      setTimeout(() => process.exit(1), 50);
+    }
   }
 }

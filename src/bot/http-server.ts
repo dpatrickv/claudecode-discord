@@ -4,7 +4,8 @@
  * Routes:
  *   POST /interact              — button / select-menu action callback
  *   POST /commands/:name        — slash-command invocation (form-encoded)
- *   GET  /health                — liveness probe for the watchdog script
+ *   GET  /health                — liveness probe (process alive only)
+ *   GET  /healthz               — readiness probe (WS actually connected to MM)
  *
  * All inbound requests are verified against the per-command / per-action shared secret
  * configured at command-registration time (Phase 2g) — without verification, any LAN
@@ -15,12 +16,18 @@ import express, { type Express, type Request, type Response } from "express";
 import type { CommandModule, HandlerContext, InteractRequest, SlashRequest } from "./types.js";
 import { handleInteract } from "./handlers/interact.js";
 import { isAllowedUser } from "../security/guard.js";
+import type { MattermostClient } from "./mattermost-client.js";
 
 export interface HttpServerOptions {
   port: number;
   commands: Map<string, CommandModule>;
   context: HandlerContext;
+  mmClient: MattermostClient;
 }
+
+// If the WS has been closed this long without recovering, /healthz returns 503
+// so the supervisor watchdog + server-watchdog alerts can catch it.
+const WS_STALE_THRESHOLD_MS = 2 * 60 * 1000;
 
 export function createHttpServer(opts: HttpServerOptions): Express {
   const app = express();
@@ -31,6 +38,25 @@ export function createHttpServer(opts: HttpServerOptions): Express {
 
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ alive: true, pid: process.pid, service: "claudecode-mattermost" });
+  });
+
+  // --- Readiness: WS actually connected to Mattermost -----------------------
+
+  app.get("/healthz", (_req: Request, res: Response) => {
+    const h = opts.mmClient.getWsHealth();
+    let ready = h.connected;
+    // If disconnected, allow a brief grace period before flipping to 503 — the
+    // WS client's internal reconnect usually succeeds within seconds.
+    if (!ready && h.lastClosedAt) {
+      const closedMs = Date.now() - new Date(h.lastClosedAt).getTime();
+      if (closedMs < WS_STALE_THRESHOLD_MS) ready = true;
+    }
+    res.status(ready ? 200 : 503).json({
+      ready,
+      service: "claudecode-mattermost",
+      pid: process.pid,
+      ws: h,
+    });
   });
 
   // --- Slash commands --------------------------------------------------------

@@ -68,6 +68,7 @@ export async function startBot(): Promise<void> {
     port: config.HTTP_BIND_PORT,
     commands: buildCommandMap(),
     context,
+    mmClient,
   });
 
   // 7. `posted` events → session-manager
