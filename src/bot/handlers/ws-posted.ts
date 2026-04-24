@@ -62,13 +62,15 @@ async function downloadFile(
   const filePath = path.join(uploadDir, fileName);
 
   try {
-    // Client4.getFileRoute gives us the API path; hit it with the bearer token.
+    // Client4.getFileRoute already returns the full absolute URL
+    // (e.g. "https://host/api/v4/files/<id>"), so do NOT prefix getUrl()
+    // again — that builds a doubled-up URL and fetch() fails with a generic
+    // "fetch failed" (DNS lookup on hostname+https://host).
     const client = ctx.client as unknown as {
       getFileRoute: (id: string) => string;
-      getUrl: () => string;
       getToken: () => string;
     };
-    const url = `${client.getUrl()}${client.getFileRoute(file.id)}`;
+    const url = client.getFileRoute(file.id);
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${client.getToken()}` },
     });
